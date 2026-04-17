@@ -379,6 +379,8 @@ tr.rs-miss td{opacity:.22;}
 #restoreInput{display:none;}
 /* 초기화/복구 모달 */
 .dm-ov{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9000;display:flex;align-items:center;justify-content:center;}
+#vcBackupModal{display:none;}
+#vcBackupModal.open{display:flex;}
 .dm-box{background:#fff;border-radius:14px;padding:32px 36px;min-width:340px;max-width:420px;box-shadow:0 8px 40px rgba(0,0,0,.25);text-align:center;}
 .dm-icon{font-size:40px;margin-bottom:12px;}
 .dm-title{font-size:16px;font-weight:800;color:#1a1a2e;margin-bottom:8px;}
@@ -756,10 +758,8 @@ tr.rs-miss td{opacity:.22;}
     <div class="hdr-save">
       <span class="save-txt" style="color:rgba(255,255,255,.45);margin-right:6px">Ver.0.9</span>
       <span class="save-txt" style="color:rgba(255,255,255,.45);margin-right:14px">문의 : 이승학 전임강사</span>
-      <button class="hdr-btn hdr-btn-backup" onclick="doBackup()">💾 전체백업</button>
-      <button class="hdr-btn hdr-btn-backup" onclick="openVcBackupModal('backup')" style="background:rgba(255,255,255,.12)">🏢 VC백업</button>
-      <button class="hdr-btn hdr-btn-restore" onclick="openRestore()">📂 전체복구</button>
-      <button class="hdr-btn hdr-btn-restore" onclick="openVcBackupModal('restore')" style="background:rgba(100,200,120,.15)">🏢 VC복구</button>
+      <button class="hdr-btn hdr-btn-backup" onclick="openVcBackupModal('backup')">💾 VC 백업</button>
+      <button class="hdr-btn hdr-btn-restore" onclick="openVcBackupModal('restore')">📂 VC 복구</button>
       <button class="hdr-btn hdr-btn-reset" onclick="openReset()">🗑️ 데이터 초기화</button>
       <div style="width:1px;height:22px;background:rgba(255,255,255,.2);margin:0 10px"></div>
       <div class="save-dot" id="saveDot"></div>
@@ -6711,6 +6711,7 @@ function getRegionLabel() {
 /* ── 백업 JSON 파일명 (공백 없음 — iOS 호환) ── */
 /* ════ VC 별 백업/복구 모달 ════ */
 let _vcModalMode = 'backup'; // 'backup' | 'restore'
+let _pendingResetAfterBackup = false;
 
 function openVcBackupModal(mode) {
   _vcModalMode = mode;
@@ -6740,15 +6741,38 @@ function openVcBackupModal(mode) {
     o.value = r; o.textContent = r;
     regionSel.appendChild(o);
   });
-  document.getElementById('vcModalCheckList').innerHTML =
-    '<div style="color:#AAA;font-size:13px;text-align:center;padding:8px">지역단을 먼저 선택하세요</div>';
-  document.getElementById('vcModalCount').textContent = '';
 
-  modal.style.display = 'flex';
-}
+  // 기존 선택된 교육생의 지역단 자동 선택
+  let autoRegion = '';
+  if (selId) {
+    const stu = db.students.find(s => s.id === selId);
+    if (stu && stu.vc) {
+      for (const [r, vcs] of Object.entries(ORG_DATA)) {
+        if (Object.keys(vcs).includes(stu.vc)) { autoRegion = r; break; }
+      }
+    }
+  }
+  if (autoRegion) {
+    regionSel.value = autoRegion;
+    vcModalRegionChange();
+    // 현재 교육생 VC 자동 체크
+    if (selId) {
+      const stu = db.students.find(s => s.id === selId);
+      if (stu?.vc) {
+        const cb = document.querySelector(`.vc-modal-cb[value="${stu.vc}"]`);
+        if (cb) { cb.checked = true; vcModalCountUpdate(); }
+      }
+    }
+  } else {
+    document.getElementById('vcModalCheckList').innerHTML =
+      '<div style="color:#AAA;font-size:13px;text-align:center;padding:8px">지역단을 선택하세요</div>';
+    document.getElementById('vcModalCount').textContent = '';
+  }
+
+  modal.classList.add('open');}
 
 function closeVcBackupModal() {
-  document.getElementById('vcBackupModal').style.display = 'none';
+  document.getElementById('vcBackupModal').classList.remove('open');
 }
 
 function vcModalRegionChange() {
@@ -6832,6 +6856,12 @@ function _doVcBackup(vcs) {
 
   closeVcBackupModal();
   showToast(`💾 [${vcs.join(', ')}] 백업 완료 (교육생 ${students.length}명)`, 'ok');
+
+  // 초기화 대기 중이었으면 백업 후 초기화 진행
+  if (_pendingResetAfterBackup) {
+    _pendingResetAfterBackup = false;
+    setTimeout(() => confirmReset(), 400);
+  }
 }
 
 /* VC 별 복구 */
@@ -7012,19 +7042,15 @@ function openReset() {
   showDmModal({
     icon: '⚠️',
     title: '데이터 초기화',
-    msg: '데이터를 초기화 합니다.\n백업하시겠습니까?',
-    yLabel: '예 (백업 후 초기화)',
-    nLabel: '아니오',
+    msg: '모든 교육생 및 면담 데이터를\n초기화 하시겠습니까?\n\n<span style="font-size:12px;color:#E53935">⚠️ 먼저 VC 백업을 해두시길 권장합니다</span>',
+    yLabel: '예, 초기화합니다',
+    nLabel: '취소',
+    danger: true,
     onY: () => {
       closeDmModal();
-      doBackup();
-      // 백업 다운로드 후 살짝 대기 후 초기화 진행
-      setTimeout(() => confirmReset(), 600);
+      setTimeout(() => confirmReset(), 200);
     },
-    onN: () => {
-      closeDmModal();
-      confirmReset();
-    }
+    onN: () => { closeDmModal(); }
   });
 }
 
@@ -7292,7 +7318,7 @@ window.addEventListener('resize', () => {
 <input type="file" id="restoreVcInput" accept=".json,application/json,text/plain" onchange="doRestoreVC(event)">
 
 <!-- VC 백업/복구 선택 모달 -->
-<div id="vcBackupModal" style="display:none;position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)closeVcBackupModal()">
+<div id="vcBackupModal" style="display:none;position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.55);align-items:center;justify-content:center" onclick="if(event.target===this)closeVcBackupModal()">
   <div style="background:#fff;border-radius:16px;padding:28px 28px 22px;width:min(460px,95vw);max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
       <div>
@@ -7314,7 +7340,7 @@ window.addEventListener('resize', () => {
     <div style="margin-bottom:16px">
       <label style="font-size:12px;font-weight:700;color:#546E7A;display:block;margin-bottom:8px">🏢 비전센터 선택 <span style="font-weight:400;color:#AAA">(복수 선택 가능)</span></label>
       <div id="vcModalCheckList" style="border:1.5px solid #ECEFF1;border-radius:8px;padding:10px;min-height:48px;max-height:220px;overflow-y:auto;background:#FAFAFA">
-        <div style="color:#AAA;font-size:13px;text-align:center;padding:8px">지역단을 먼저 선택하세요</div>
+        <div style="color:#AAA;font-size:13px;text-align:center;padding:8px">지역단을 선택하세요</div>
       </div>
       <div style="margin-top:6px;display:flex;gap:8px">
         <button onclick="vcModalSelectAll(true)" style="font-size:11px;padding:4px 10px;border:1px solid #CFD8DC;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit">전체선택</button>
