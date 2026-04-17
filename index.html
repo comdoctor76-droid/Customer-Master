@@ -1779,14 +1779,51 @@ function fbInit() {
 
 function _fbConnect() {
   try {
-    _fbApp = firebase.initializeApp(FIREBASE_CONFIG);
+    // 이미 초기화된 앱이 있으면 재사용 (중복 초기화 방지)
+    if (firebase.apps && firebase.apps.length > 0) {
+      _fbApp = firebase.apps[0];
+    } else {
+      _fbApp = firebase.initializeApp(FIREBASE_CONFIG);
+    }
     _fbDb  = firebase.database(_fbApp);
     _fbRef = _fbDb.ref('master_itv_v4');
+
+    // 연결 상태 감지
+    const connRef = firebase.database(_fbApp).ref('.info/connected');
+    connRef.on('value', snap => {
+      const connected = snap.val();
+      const dot = document.getElementById('saveDot');
+      if (dot) dot.style.background = connected ? '#4CAF50' : '#FF9800';
+      if (connected) {
+        console.log('Firebase 실시간 연결됨 ✅');
+      } else {
+        console.warn('Firebase 연결 끊김 — 재연결 대기 중...');
+      }
+    });
+
     fbStartListener();
-    console.log('Firebase 연결 성공 ✅');
+
+    // 연결 직후 로컬 → Firebase 한 번 올리기 (로컬에 데이터 있으면)
+    if (db.students && db.students.length > 0 && db.lastSavedAt) {
+      _localWrite = true;
+      _fbRef.set(db)
+        .then(() => {
+          setTimeout(() => { _localWrite = false; }, 1500);
+          console.log('Firebase 초기 업로드 완료 ✅');
+          showToast('Firebase 연결 완료 ✅', 'ok');
+        })
+        .catch(e => {
+          _localWrite = false;
+          console.error('Firebase 초기 업로드 실패:', e);
+          showToast('Firebase 저장 실패: ' + (e.message || e), 'er');
+        });
+    } else {
+      console.log('Firebase 연결 성공 ✅');
+      showToast('Firebase 연결됨 ✅', 'ok');
+    }
   } catch(e) {
     console.error('Firebase 초기화 오류:', e);
-    showToast('Firebase 연결 실패 — 로컬 모드로 동작합니다', 'er');
+    showToast('Firebase 연결 실패: ' + (e.message || e), 'er');
   }
 }
 
@@ -1870,8 +1907,17 @@ function _dbFlush() {
     if (USE_FIREBASE && _fbRef) {
       _localWrite = true;
       _fbRef.set(db)
-        .then(() => { setTimeout(() => { _localWrite = false; }, 1500); })
-        .catch(e => { _localWrite = false; console.error('Firebase 저장 오류:', e); showToast('Firebase 저장 실패 — 로컬만 저장됨', 'er'); });
+        .then(() => {
+          setTimeout(() => { _localWrite = false; }, 1500);
+          console.log('Firebase 저장 완료 ✅', db.lastSavedAt);
+        })
+        .catch(e => {
+          _localWrite = false;
+          console.error('Firebase 저장 오류 상세:', e.code, e.message);
+          showToast('Firebase 저장 실패: ' + (e.message || e.code || e), 'er');
+        });
+    } else if (USE_FIREBASE && !_fbRef) {
+      console.warn('Firebase 미연결 상태 — 로컬만 저장됨');
     }
   } catch(e) { showToast('저장 공간이 부족합니다', 'er'); }
 }
