@@ -43,6 +43,12 @@
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Noto Sans KR',sans-serif;background:#ECEEF2;color:var(--g9);min-height:100vh;}
+/* iOS 터치 이벤트 전역 활성화 */
+button,a,[onclick],label,select,.tab,.sp-tab,.btn,.stu-item,.stat-box,.mob-nb,.vc-chip{
+  cursor:pointer;
+  -webkit-tap-highlight-color:rgba(0,0,0,0.1);
+  touch-action:manipulation;
+}
 
 /* ── HEADER ── */
 .hdr{background:linear-gradient(135deg,var(--nv),var(--nv2));position:sticky;top:0;z-index:300;box-shadow:0 2px 18px rgba(0,0,0,.3);}
@@ -733,7 +739,7 @@ tr.rs-miss td{opacity:.22;}
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
-<body>
+<body ontouchstart=""><!-- iOS 터치 이벤트 활성화 -->
 
 <!-- HEADER -->
 <div class="hdr no-print">
@@ -750,8 +756,10 @@ tr.rs-miss td{opacity:.22;}
     <div class="hdr-save">
       <span class="save-txt" style="color:rgba(255,255,255,.45);margin-right:6px">Ver.0.9</span>
       <span class="save-txt" style="color:rgba(255,255,255,.45);margin-right:14px">문의 : 이승학 전임강사</span>
-      <button class="hdr-btn hdr-btn-backup" onclick="doBackup()">💾 데이터 백업</button>
-      <button class="hdr-btn hdr-btn-restore" onclick="openRestore()">📂 복구하기</button>
+      <button class="hdr-btn hdr-btn-backup" onclick="doBackup()">💾 전체백업</button>
+      <button class="hdr-btn hdr-btn-backup" onclick="openVcBackupModal('backup')" style="background:rgba(255,255,255,.12)">🏢 VC백업</button>
+      <button class="hdr-btn hdr-btn-restore" onclick="openRestore()">📂 전체복구</button>
+      <button class="hdr-btn hdr-btn-restore" onclick="openVcBackupModal('restore')" style="background:rgba(100,200,120,.15)">🏢 VC복구</button>
       <button class="hdr-btn hdr-btn-reset" onclick="openReset()">🗑️ 데이터 초기화</button>
       <div style="width:1px;height:22px;background:rgba(255,255,255,.2);margin:0 10px"></div>
       <div class="save-dot" id="saveDot"></div>
@@ -1836,7 +1844,9 @@ function fbStartListener() {
     if (!remote) return;
     const remoteTime = remote.lastSavedAt || '';
     const localTime  = db.lastSavedAt    || '';
-    if (remoteTime <= localTime) return;
+    // 원격 데이터가 더 최신이거나 로컬에 데이터가 없으면 동기화
+    // (같은 시간이면 원격 우선 — 다른 기기 저장 반영)
+    if (remoteTime < localTime) return;
     try {
       db = Object.assign({vcList: db.vcList||[], branchList: db.branchList||[]}, remote);
       _fixCalcTgt();
@@ -1902,7 +1912,18 @@ function dbSaveNow() {
 function _dbFlush() {
   try {
     db.lastSavedAt = new Date().toISOString();
-    localStorage.setItem(SK, JSON.stringify(db));
+    const dbStr = JSON.stringify(db);
+
+    // localStorage 저장 (용량 초과 시 graceful 처리)
+    try {
+      localStorage.setItem(SK, dbStr);
+    } catch(qe) {
+      localStorage.removeItem(SK);
+      try { localStorage.setItem(SK, dbStr); } catch(e2) {
+        console.warn('localStorage 용량 초과 — Firebase에만 저장됩니다');
+      }
+    }
+
     showSaveIndicator(db.lastSavedAt);
     if (USE_FIREBASE && _fbRef) {
       _localWrite = true;
@@ -1913,13 +1934,16 @@ function _dbFlush() {
         })
         .catch(e => {
           _localWrite = false;
-          console.error('Firebase 저장 오류 상세:', e.code, e.message);
+          console.error('Firebase 저장 오류:', e.code, e.message);
           showToast('Firebase 저장 실패: ' + (e.message || e.code || e), 'er');
         });
     } else if (USE_FIREBASE && !_fbRef) {
-      console.warn('Firebase 미연결 상태 — 로컬만 저장됨');
+      console.warn('Firebase 미연결 — 로컬만 저장됨');
     }
-  } catch(e) { showToast('저장 공간이 부족합니다', 'er'); }
+  } catch(e) {
+    console.error('저장 오류:', e);
+    showToast('저장 중 오류: ' + e.message, 'er');
+  }
 }
 
 function showSaveIndicator(isoStr) {
@@ -6685,6 +6709,208 @@ function getRegionLabel() {
 
 /* 파일명 생성: 지역단명_YYYY년MM월DD일_HH시MM분 */
 /* ── 백업 JSON 파일명 (공백 없음 — iOS 호환) ── */
+/* ════ VC 별 백업/복구 모달 ════ */
+let _vcModalMode = 'backup'; // 'backup' | 'restore'
+
+function openVcBackupModal(mode) {
+  _vcModalMode = mode;
+  const modal = document.getElementById('vcBackupModal');
+  const title = document.getElementById('vcModalTitle');
+  const btn   = document.getElementById('vcModalConfirmBtn');
+  const note  = document.getElementById('vcModalNote');
+
+  if (mode === 'backup') {
+    title.textContent = '💾 VC 별 데이터 백업';
+    btn.textContent   = '💾 선택한 VC 백업';
+    btn.style.background = 'linear-gradient(135deg,#1A2744,#2C3F6E)';
+    note.style.display = 'none';
+  } else {
+    title.textContent = '📂 VC 별 데이터 복구';
+    btn.textContent   = '📂 파일 선택 후 복구';
+    btn.style.background = 'linear-gradient(135deg,#2E7D32,#43A047)';
+    note.innerHTML = '⚠️ <strong>복구 시 선택한 VC의 기존 데이터만 교체됩니다.</strong><br>다른 VC 데이터는 보존됩니다.';
+    note.style.display = 'block';
+  }
+
+  // 지역단 드롭다운 초기화
+  const regionSel = document.getElementById('vcModalRegion');
+  regionSel.innerHTML = '<option value="">— 지역단 선택 —</option>';
+  Object.keys(ORG_DATA).forEach(r => {
+    const o = document.createElement('option');
+    o.value = r; o.textContent = r;
+    regionSel.appendChild(o);
+  });
+  document.getElementById('vcModalCheckList').innerHTML =
+    '<div style="color:#AAA;font-size:13px;text-align:center;padding:8px">지역단을 먼저 선택하세요</div>';
+  document.getElementById('vcModalCount').textContent = '';
+
+  modal.style.display = 'flex';
+}
+
+function closeVcBackupModal() {
+  document.getElementById('vcBackupModal').style.display = 'none';
+}
+
+function vcModalRegionChange() {
+  const r = document.getElementById('vcModalRegion').value;
+  const list = document.getElementById('vcModalCheckList');
+  if (!r || !ORG_DATA[r]) {
+    list.innerHTML = '<div style="color:#AAA;font-size:13px;text-align:center;padding:8px">지역단을 먼저 선택하세요</div>';
+    return;
+  }
+  const vcs = Object.keys(ORG_DATA[r]);
+  list.innerHTML = vcs.map(vc => {
+    // 해당 VC 소속 학생 수
+    const cnt = (db.students || []).filter(s => s.vc === vc).length;
+    return `<label style="display:flex;align-items:center;gap:8px;padding:7px 6px;cursor:pointer;border-radius:6px;transition:.1s" onmouseover="this.style.background='#EEF2FF'" onmouseout="this.style.background='transparent'">
+      <input type="checkbox" class="vc-modal-cb" value="${vc}" onchange="vcModalCountUpdate()" style="width:16px;height:16px;accent-color:#3949AB;cursor:pointer">
+      <span style="font-size:13px;font-weight:700;flex:1">${vc}</span>
+      <span style="font-size:11px;color:#999;background:#F5F5F5;padding:2px 7px;border-radius:10px">${cnt}명</span>
+    </label>`;
+  }).join('');
+  vcModalCountUpdate();
+}
+
+function vcModalSelectAll(checked) {
+  document.querySelectorAll('.vc-modal-cb').forEach(cb => cb.checked = checked);
+  vcModalCountUpdate();
+}
+
+function vcModalCountUpdate() {
+  const checked = document.querySelectorAll('.vc-modal-cb:checked').length;
+  document.getElementById('vcModalCount').textContent =
+    checked > 0 ? `${checked}개 선택됨` : '';
+}
+
+function _getSelectedVCs() {
+  return Array.from(document.querySelectorAll('.vc-modal-cb:checked')).map(cb => cb.value);
+}
+
+function confirmVcAction() {
+  const vcs = _getSelectedVCs();
+  if (vcs.length === 0) { showToast('비전센터를 1개 이상 선택하세요', 'er'); return; }
+  if (_vcModalMode === 'backup') {
+    _doVcBackup(vcs);
+  } else {
+    // 복구: 선택한 VC 목록을 전역 저장 후 파일 선택
+    window._pendingRestoreVCs = vcs;
+    document.getElementById('restoreVcInput').value = '';
+    document.getElementById('restoreVcInput').click();
+  }
+}
+
+function _doVcBackup(vcs) {
+  const vcSet = new Set(vcs);
+  // 선택 VC 소속 학생/면담/화법 데이터만 추출
+  const students   = (db.students   || []).filter(s => vcSet.has(s.vc));
+  const stuIds     = new Set(students.map(s => s.id));
+  const interviews = (db.interviews || []).filter(i => stuIds.has(i.studentId));
+  const speechTests = {};
+  Object.entries(db.speechTests || {}).forEach(([sid, val]) => {
+    if (stuIds.has(sid)) speechTests[sid] = val;
+  });
+
+  const payload = {
+    _vcBackup: true,          // VC 별 백업 마커
+    _vcs: vcs,                // 포함된 VC 목록
+    _backupAt: new Date().toISOString(),
+    students, interviews, speechTests,
+    award: db.award || {},
+  };
+
+  const now    = new Date();
+  const pad    = n => String(n).padStart(2,'0');
+  const ts     = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+  const vcLabel = vcs.length === 1 ? vcs[0].replace('비전센터','VC') : `VC${vcs.length}개`;
+  const filename = `${vcLabel}_면담일지_${ts}.json`;
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+
+  closeVcBackupModal();
+  showToast(`💾 [${vcs.join(', ')}] 백업 완료 (교육생 ${students.length}명)`, 'ok');
+}
+
+/* VC 별 복구 */
+function doRestoreVC(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const vcs = window._pendingRestoreVCs || [];
+  const reader = new FileReader();
+  reader.onload = ev => {
+    e.target.value = '';
+    try {
+      const parsed = JSON.parse(ev.target.result);
+      // VC 백업 파일 검증
+      if (!parsed._vcBackup) {
+        // 일반 전체 백업 파일도 허용 — VC 필터링 적용
+        if (!parsed.students) throw new Error('students 누락');
+      }
+      if (!parsed.students) throw new Error('students 누락');
+
+      const vcSet    = new Set(vcs);
+      const newStus  = (parsed.students   || []).filter(s => vcSet.has(s.vc));
+      const newItvs  = (parsed.interviews || []).filter(i => newStus.some(s => s.id === i.studentId));
+      const newSpeech = {};
+      newStus.forEach(s => {
+        if (parsed.speechTests?.[s.id]) newSpeech[s.id] = parsed.speechTests[s.id];
+      });
+
+      if (newStus.length === 0) {
+        showToast('선택한 VC에 해당하는 교육생 데이터가 없습니다', 'er');
+        return;
+      }
+
+      // 확인 다이얼로그
+      const msg = `[${vcs.join(', ')}] 복구를 진행합니다.\n\n` +
+        `• 교육생: ${newStus.length}명\n` +
+        `• 면담: ${newItvs.length}건\n\n` +
+        `⚠️ 선택한 VC의 기존 데이터가 교체됩니다.\n다른 VC 데이터는 보존됩니다.\n\n계속하시겠습니까?`;
+      if (!confirm(msg)) return;
+
+      // 기존 db에서 해당 VC 제거 후 새 데이터 병합
+      const stuIdsToRemove = new Set(
+        (db.students || []).filter(s => vcSet.has(s.vc)).map(s => s.id)
+      );
+
+      db.students   = [...(db.students   || []).filter(s => !vcSet.has(s.vc)),    ...newStus];
+      db.interviews = [...(db.interviews || []).filter(i => !stuIdsToRemove.has(i.studentId)), ...newItvs];
+      db.speechTests = db.speechTests || {};
+      stuIdsToRemove.forEach(id => delete db.speechTests[id]);
+      Object.assign(db.speechTests, newSpeech);
+
+      // calcTgt 보정
+      (db.interviews || []).forEach(itv => {
+        if (itv.calcTgt) {
+          const v = parseFloat((itv.calcTgt||'').replace(/,/g,'')) || 0;
+          if (v > 0 && v < 1000) itv.calcTgt = String(Math.round(v * 1000));
+        }
+      });
+
+      db.lastSavedAt = new Date().toISOString();
+      dbSaveNow();
+      selId = null;
+      renderVCFilter && renderVCFilter();
+      initSbFilter  && initSbFilter();
+      renderStudentList();
+      updateStats();
+      renderPrintFilterSelect && renderPrintFilterSelect();
+      renderHonorsTable && renderHonorsTable();
+
+      closeVcBackupModal();
+      showToast(`📂 [${vcs.join(', ')}] 복구 완료 (교육생 ${newStus.length}명)`, 'ok');
+    } catch(err) {
+      console.error('VC 복구 오류:', err);
+      alert('복구 중 오류가 발생했습니다.\n\n오류: ' + err.message);
+    }
+  };
+  reader.onerror = () => { e.target.value = ''; showToast('파일 읽기 실패', 'er'); };
+  reader.readAsText(file, 'utf-8');
+}
+
 function makeBackupFilename() {
   const region = getRegionLabel();
   const now = new Date();
@@ -7063,6 +7289,50 @@ window.addEventListener('resize', () => {
 </nav>
 
 <input type="file" id="restoreInput" accept=".json,application/json,text/plain" onchange="doRestore(event)">
+<input type="file" id="restoreVcInput" accept=".json,application/json,text/plain" onchange="doRestoreVC(event)">
+
+<!-- VC 백업/복구 선택 모달 -->
+<div id="vcBackupModal" style="display:none;position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)closeVcBackupModal()">
+  <div style="background:#fff;border-radius:16px;padding:28px 28px 22px;width:min(460px,95vw);max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div>
+        <div style="font-size:18px;font-weight:900;color:#1A2744" id="vcModalTitle">💾 VC 별 데이터 백업</div>
+        <div style="font-size:12px;color:#888;margin-top:3px">선택한 VC의 데이터만 백업/복구합니다</div>
+      </div>
+      <button onclick="closeVcBackupModal()" style="border:none;background:#F0F0F0;border-radius:50%;width:32px;height:32px;font-size:16px;cursor:pointer">✕</button>
+    </div>
+
+    <!-- 지역단 -->
+    <div style="margin-bottom:10px">
+      <label style="font-size:12px;font-weight:700;color:#546E7A;display:block;margin-bottom:5px">🗺️ 지역단</label>
+      <select id="vcModalRegion" onchange="vcModalRegionChange()" style="width:100%;padding:9px 12px;border:1.5px solid #CFD8DC;border-radius:8px;font-size:13px;font-family:inherit;outline:none">
+        <option value="">— 지역단 선택 —</option>
+      </select>
+    </div>
+
+    <!-- 비전센터 체크박스 목록 -->
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;font-weight:700;color:#546E7A;display:block;margin-bottom:8px">🏢 비전센터 선택 <span style="font-weight:400;color:#AAA">(복수 선택 가능)</span></label>
+      <div id="vcModalCheckList" style="border:1.5px solid #ECEFF1;border-radius:8px;padding:10px;min-height:48px;max-height:220px;overflow-y:auto;background:#FAFAFA">
+        <div style="color:#AAA;font-size:13px;text-align:center;padding:8px">지역단을 먼저 선택하세요</div>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:8px">
+        <button onclick="vcModalSelectAll(true)" style="font-size:11px;padding:4px 10px;border:1px solid #CFD8DC;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit">전체선택</button>
+        <button onclick="vcModalSelectAll(false)" style="font-size:11px;padding:4px 10px;border:1px solid #CFD8DC;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit">전체해제</button>
+        <span id="vcModalCount" style="font-size:11px;color:#888;align-self:center;margin-left:4px"></span>
+      </div>
+    </div>
+
+    <!-- 안내 문구 -->
+    <div id="vcModalNote" style="background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;padding:10px 12px;font-size:12px;color:#795548;margin-bottom:16px;display:none"></div>
+
+    <!-- 버튼 -->
+    <div style="display:flex;gap:10px">
+      <button onclick="closeVcBackupModal()" style="flex:1;padding:11px;border:1.5px solid #CFD8DC;background:#fff;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;color:#555">취소</button>
+      <button id="vcModalConfirmBtn" onclick="confirmVcAction()" style="flex:2;padding:11px;background:linear-gradient(135deg,#1A2744,#2C3F6E);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit">확인</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
